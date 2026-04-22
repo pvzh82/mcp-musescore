@@ -340,14 +340,25 @@ MuseScore {
                     elements: elementsMap,
                     totalDuration: endSegment.tick - startSegment.tick
                 };
-            } else if (cursor.element) {
-                var elElement = processElement(cursor.element);
-                elElement.startTick = cursor.tick;
-                var singleMap = {};
-                singleMap[`staff${selectionState.startStaff}`] = [elElement];
-                
-                selectionState.elements = singleMap;
-                selectionState.totalDuration = elElement.durationTicks;
+            } else {
+                var c = createCursor();
+                if (c && c.element) {
+                    var elElement = processElement(c.element);
+                    elElement.startTick = c.tick;
+                    var sStart = selection.startStaff || 0;
+                    var singleMap = {};
+                    singleMap[`staff${sStart}`] = [elElement];
+                    
+                    selectionState = {
+                        startStaff: sStart,
+                        endStaff: sStart + 1,
+                        startTick: c.tick,
+                        elements: singleMap,
+                        totalDuration: elElement.durationTicks
+                    };
+                } else {
+                    return { error: "No valid selection or cursor elements found" };
+                }
             }
 
             return { success: true, currentSelection: selectionState };
@@ -621,13 +632,56 @@ MuseScore {
         if (!validation.valid) return validation;
 
         return executeWithUndo(function() {
+            var startTick = params.startTick;
+            var endTick = params.endTick;
+            var startStaff = params.startStaff;
+            var endStaff = params.endStaff;
+
+            // Visual GUI snap
             curScore.selection.clear();
-            curScore.selection.selectRange(params.startTick, params.endTick, params.startStaff, params.endStaff);
+            curScore.selection.selectRange(startTick, endTick, startStaff, endStaff);
 
-            var res = syncStateToSelection();
-            if (res.error) return res;
+            var elementsMap = {};
+            for (var st = startStaff; st < endStaff; st++) {
+                elementsMap[`staff${st}`] = [];
+            }
 
-            return { success: true, message: "Selection updated", currentSelection: selectionState };
+            var c = createCursor({ startTick: 0, startStaff: startStaff });
+            c.rewind(0);
+            var currentSegment = c.segment;
+
+            while (currentSegment && currentSegment.tick < startTick) {
+                currentSegment = currentSegment.next;
+            }
+
+            while (currentSegment && currentSegment.tick < endTick) {
+                for (var s = startStaff; s < endStaff; s++) {
+                    for (var v = 0; v < 4; v++) {
+                        var track = s * 4 + v;
+                        var el = currentSegment.elementAt(track);
+                        if (el) {
+                            var processed = processElement(el);
+                            if (processed) {
+                                processed.staff = s;
+                                processed.voice = v;
+                                processed.startTick = currentSegment.tick;
+                                elementsMap[`staff${s}`].push(processed);
+                            }
+                        }
+                    }
+                }
+                currentSegment = currentSegment.next;
+            }
+
+            selectionState = {
+                startStaff: startStaff,
+                endStaff: endStaff,
+                startTick: startTick,
+                elements: elementsMap,
+                totalDuration: endTick - startTick
+            };
+
+            return { success: true, message: "Custom range mapped", currentSelection: selectionState };
         });
     }
 
