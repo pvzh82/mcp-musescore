@@ -107,7 +107,7 @@ musescore4
 
 ## Features
 
-This MCP server provides comprehensive MuseScore control:
+This MCP server provides comprehensive MuseScore control. **🌟 NEW in this fork:** Built-in automatic, flawless multi-voice Polyphony & Temporal layout mapping to LilyPond!
 
 ### **Navigation & Cursor Control**
 - `get_cursor_info()` - Get current cursor position and selection info
@@ -116,6 +116,11 @@ This MCP server provides comprehensive MuseScore control:
 - `next_element()` / `prev_element()` - Move cursor element by element
 - `next_staff()` / `prev_staff()` - Move between staves
 - `select_current_measure()` - Select entire current measure
+- `select_custom_range(start_tick, end_tick, start_staff, end_staff)` - 🌟 Slicing tool to extract cross-measure, multi-staff phrasing perfectly!
+
+### **Polyphony & LilyPond Integration**
+- **Temporal Rhythm Padding**: Voices with gaps or rests automatically receive LilyPond spacer sequences (`s4.`) to hold their mathematical place accurately.
+- **Concurrent Voice Rendering**: Full 4-voice (`\voiceOne`, `\voiceTwo`, etc.) arrays correctly structured and sharded per staff for advanced Agent processing.
 
 ### **Note & Rest Creation**
 - `add_note(pitch, duration, advance_cursor_after_action)` - Add notes with MIDI pitch
