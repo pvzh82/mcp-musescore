@@ -308,7 +308,11 @@ MuseScore {
                     startStaff: selection.startStaff    
                 });
 
-                var elements = [];
+                var elementsMap = {};
+                for (var st = selection.startStaff; st < selection.endStaff; st++) {
+                    elementsMap[`staff${st}`] = [];
+                }
+
                 var currentSegment = startSegment;
                 while (currentSegment && currentSegment.tick < endSegment.tick) {
                     for (var s = selection.startStaff; s < selection.endStaff; s++) {
@@ -321,7 +325,7 @@ MuseScore {
                                     processed.staff = s;
                                     processed.voice = v;
                                     processed.startTick = currentSegment.tick;
-                                    elements.push(processed);
+                                    elementsMap[`staff${s}`].push(processed);
                                 }
                             }
                         }
@@ -333,14 +337,20 @@ MuseScore {
                     startStaff: selection.startStaff,
                     endStaff: selection.endStaff,
                     startTick: startSegment.tick,
-                    elements: elements,
-                    totalDuration: elements.reduce(function(a, b) { return a + (b.durationTicks || 0); }, 0)
+                    elements: elementsMap,
+                    totalDuration: endSegment.tick - startSegment.tick
                 };
-
-                return { success: true, currentSelection: selectionState };
-            } else {
-                return { success: false, error: "No valid selection found" };
+            } else if (cursor.element) {
+                var elElement = processElement(cursor.element);
+                elElement.startTick = cursor.tick;
+                var singleMap = {};
+                singleMap[`staff${selectionState.startStaff}`] = [elElement];
+                
+                selectionState.elements = singleMap;
+                selectionState.totalDuration = elElement.durationTicks;
             }
+
+            return { success: true, currentSelection: selectionState };
         } catch (e) {
             return { success: false, error: e.toString() };
         }
@@ -363,23 +373,20 @@ MuseScore {
 
         return executeWithUndo(function() {
             var score = getScoreSummary();
-            var measure = score.measures[params.measure - 1];
+            if (params.measure < 1 || params.measure > score.measures.length) {
+                return { error: "Invalid measure number" };
+            }
+            var measureIdx = params.measure - 1;
+            var measure = score.measures[measureIdx];
             var startTick = measure.startTick;
             
-            var cursor = createCursor({ startTick: startTick, startStaff: selectionState.startStaff });
-            var element = processElement(cursor.element);
-            var staffIdx = selectionState.startStaff;
+            var endTick = (measureIdx + 1 < score.measures.length) ? score.measures[measureIdx + 1].startTick : curScore.lastSegment.tick;
             
             curScore.selection.clear();
-            curScore.selection.selectRange(startTick, startTick + element.durationTicks, staffIdx, staffIdx + 1);
+            curScore.selection.selectRange(startTick, endTick, 0, curScore.nstaves);
             
-            selectionState = {
-                startStaff: staffIdx,
-                endStaff: staffIdx + 1,
-                startTick: startTick,
-                elements: [element],
-                totalDuration: element.durationTicks
-            };
+            var res = syncStateToSelection();
+            if (res.error) return res;
             
             return { success: true, currentSelection: selectionState };
         });
@@ -582,41 +589,30 @@ MuseScore {
     function selectCurrentMeasure() {
         return executeWithUndo(function() {
             var cursor = createCursor({ 
-                startTick: selectionState.startTick, 
-                startStaff: selectionState.startStaff 
+                startTick: selectionState.startTick || 0, 
+                startStaff: selectionState.startStaff || 0 
             });
 
             var currTick = cursor.tick;
-            var currStaff = cursor.staffIdx;
             var scoreSummary = getScoreSummary();
 
-            var measureIdx = scoreSummary.measures.filter(function(measure) { 
-                return measure.startTick <= currTick; 
+            var measureIdx = scoreSummary.measures.filter(function(m) { 
+                return m.startTick <= currTick; 
             }).length - 1;
             
+            if (measureIdx < 0) return { error: "Invalid cursor position" };
+            
             var measure = scoreSummary.measures[measureIdx];
-            var measureElements = measure.elements[`staff${currStaff}`];
-            var totalDuration = measureElements.reduce(function(a, b) { 
-                return a + (b.durationTicks || 0); 
-            }, 0);
-            var measureEndTick = measure.startTick + totalDuration;
+            var startTick = measure.startTick;
+            var endTick = (measureIdx + 1 < scoreSummary.measures.length) ? scoreSummary.measures[measureIdx + 1].startTick : curScore.lastSegment.tick;
 
             curScore.selection.clear();
-            curScore.selection.selectRange(measure.startTick, measureEndTick, currStaff, currStaff + 1);
+            curScore.selection.selectRange(startTick, endTick, 0, curScore.nstaves);
 
-            selectionState = {
-                startStaff: currStaff,
-                endStaff: currStaff + 1,
-                startTick: measure.startTick,
-                elements: measureElements,
-                totalDuration: totalDuration
-            };
-
-            return { 
-                success: true, 
-                message: `Selected measure ${measureIdx + 1}`, 
-                currentSelection: selectionState
-            };
+            var res = syncStateToSelection();
+            if (res.error) return res;
+            
+            return { success: true, message: `Selected measure ${measureIdx + 1}`, currentSelection: selectionState };
         });
     }
 
@@ -625,23 +621,11 @@ MuseScore {
         if (!validation.valid) return validation;
 
         return executeWithUndo(function() {
-            var cursor = createCursor({ 
-                startTick: params.startTick, 
-                startStaff: params.startStaff 
-            });
-
-            var element = processElement(cursor.element);
-            
             curScore.selection.clear();
             curScore.selection.selectRange(params.startTick, params.endTick, params.startStaff, params.endStaff);
 
-            selectionState = {
-                startStaff: params.startStaff,
-                endStaff: params.endStaff,
-                startTick: params.startTick,
-                elements: [element],
-                totalDuration: params.endTick - params.startTick
-            };
+            var res = syncStateToSelection();
+            if (res.error) return res;
 
             return { success: true, message: "Selection updated", currentSelection: selectionState };
         });

@@ -107,3 +107,17 @@ def setup_navigation_tools(mcp, client: MuseScoreClient):
     async def select_current_measure():
         """Select the current measure."""
         return await _run_and_convert("selectCurrentMeasure")
+        
+    @mcp.tool()
+    async def select_custom_range(start_tick: int, end_tick: int, start_staff: int, end_staff: int):
+        """
+        Select a custom range of ticks across staves.
+        This provides high surgical precision for retrieving continuous phrasing that spans measure bounds.
+        """
+        params = {
+            "startTick": start_tick,
+            "endTick": end_tick,
+            "startStaff": start_staff,
+            "endStaff": end_staff
+        }
+        return await _run_and_convert("selectCustomRange", params)

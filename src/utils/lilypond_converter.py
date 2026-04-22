@@ -80,6 +80,32 @@ def ticks_to_lilypond_duration(ticks: int) -> str:
         logger.error(f"Error converting ticks {ticks}: {e}")
         return "4"
 
+def ticks_to_spacers(ticks: int) -> List[str]:
+    """
+    Greedily consume temporal gap into valid Lilypond spacer rests.
+    """
+    if ticks <= 0:
+        return []
+    
+    spacers = []
+    # Using standard valid LilyPond rhythm sizes sorted by size descending
+    mapping = [
+        (1920, "1"), (1440, "2."), (960, "2"), (720, "4."), 
+        (480, "4"), (360, "8."), (240, "8"), (180, "16."), 
+        (120, "16"), (60, "32"), (30, "64")
+    ]
+    
+    remaining = ticks
+    for tick_val, duration_str in mapping:
+        while remaining >= tick_val:
+            spacers.append(f"s{duration_str}")
+            remaining -= tick_val
+            
+    if remaining > 0:
+        logger.warning(f"Could not cleanly pad ticks, remainder {remaining} ignored.")
+        
+    return spacers
+
 def process_element(element: Dict[str, Any]) -> str:
     """
     Process a single JSON element dictionary into LilyPond syntax.
@@ -126,10 +152,15 @@ def json_to_lilypond(score_data: Dict[str, Any]) -> str:
     try:
         # Handle 'currentSelection' raw input format
         if "startStaff" in score_data and "elements" in score_data and isinstance(score_data["elements"], list):
-            staff_idx = score_data.get("startStaff", 0)
-            staff_name = f"staff{staff_idx}"
-            staff_names = [staff_name]
-            elements_by_staff = {staff_name: score_data["elements"]}
+            elements_by_staff = {}
+            for elem in score_data["elements"]:
+                s_idx = elem.get("staff", score_data.get("startStaff", 0))
+                s_name = f"staff{s_idx}"
+                if s_name not in elements_by_staff:
+                    elements_by_staff[s_name] = []
+                elements_by_staff[s_name].append(elem)
+                
+            staff_names = sorted(list(elements_by_staff.keys()), key=lambda x: int(x.replace("staff", "")))
         else:
             # Handle 'getScore' or standard wrapped output
             staves_info = score_data.get("staves", [])
@@ -165,14 +196,48 @@ def json_to_lilypond(score_data: Dict[str, Any]) -> str:
                 if mapped_v not in voices:
                     voices[mapped_v] = []
                 voices[mapped_v].append(elem)
+            # Find base tick for this staff sequence
+            base_tick = float('inf')
+            for v_idx in voices:
+                for elem in voices[v_idx]:
+                    t = elem.get("startTick")
+                    if t is not None and t < base_tick:
+                        base_tick = t
+            if base_tick == float('inf'):
+                base_tick = 0
                 
             voice_strings = []
             voice_commands = {1: "\\voiceOne", 2: "\\voiceTwo", 3: "\\voiceThree", 4: "\\voiceFour"}
             
             for v_idx in sorted(voices.keys()):
                 v_elems = voices[v_idx]
-                formatted_elems = [process_element(e) for e in v_elems]
-                formatted_elems = [e for e in formatted_elems if e]
+                
+                # Sort elements temporally to safely compute gaps
+                v_elems.sort(key=lambda x: x.get("startTick", 0))
+                
+                formatted_elems = []
+                current_tick = base_tick
+                
+                for e in v_elems:
+                    e_tick = e.get("startTick")
+                    
+                    # Fill temporal gaps with spacers
+                    if e_tick is not None and e_tick > current_tick:
+                        gap = e_tick - current_tick
+                        spacers = ticks_to_spacers(gap)
+                        formatted_elems.extend(spacers)
+                        current_tick = e_tick
+                    
+                    processed = process_element(e)
+                    if processed:
+                        formatted_elems.append(processed)
+                    
+                    # Advance internal clock by the element's explicit duration length
+                    duration = e.get("durationTicks", 480)
+                    if e_tick is not None:
+                        current_tick = e_tick + duration
+                    else:
+                        current_tick += duration
                 
                 cmd = voice_commands.get(v_idx, "\\voiceOne")
                 voice_str = f"{cmd} " + " ".join(formatted_elems)
