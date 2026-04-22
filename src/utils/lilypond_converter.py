@@ -159,11 +159,9 @@ def json_to_lilypond(score_data: Dict[str, Any]) -> str:
             # Group elements by voice (default to voice 1 if unspecified)
             voices: Dict[int, List[Dict[str, Any]]] = {}
             for elem in staff_elements:
-                # MuseScore voices are 0-indexed typically or 1-indexed depending on context
-                # Assuming 1-indexed here, or offsetting if needed
-                v = elem.get("voice", 1)
-                # In QML, it's often 0-3. So if we hit 0, map it to voice 1 logic
-                mapped_v = v if v > 0 else v + 1
+                # MuseScore voices are 0-indexed (0 to 3) from our QML plugin
+                v = elem.get("voice", 0)
+                mapped_v = v + 1
                 if mapped_v not in voices:
                     voices[mapped_v] = []
                 voices[mapped_v].append(elem)

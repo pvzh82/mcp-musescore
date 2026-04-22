@@ -309,9 +309,24 @@ MuseScore {
                 });
 
                 var elements = [];
-                while (cursor.tick < endSegment.tick && cursor.element) {
-                    elements.push(processElement(cursor.element));
-                    if (!cursor.next()) break;
+                var currentSegment = startSegment;
+                while (currentSegment && currentSegment.tick < endSegment.tick) {
+                    for (var s = selection.startStaff; s < selection.endStaff; s++) {
+                        for (var v = 0; v < 4; v++) {
+                            var track = s * 4 + v;
+                            var el = currentSegment.elementAt(track);
+                            if (el) {
+                                var processed = processElement(el);
+                                if (processed) {
+                                    processed.staff = s;
+                                    processed.voice = v;
+                                    processed.startTick = currentSegment.tick;
+                                    elements.push(processed);
+                                }
+                            }
+                        }
+                    }
+                    currentSegment = currentSegment.next;
                 }
 
                 selectionState = {
@@ -1021,22 +1036,27 @@ MuseScore {
             // Process elements for each staff
             for (var k = 0; k < curScore.nstaves; k++) {
                 cursor.rewind(0);
-                cursor.staffIdx = k;
+                var currentSegment = cursor.segment;
 
-                while (cursor.element) {
+                while (currentSegment) {
                     var measureIdx = measureBoundaries.filter(function(tick) {
-                        return tick <= cursor.tick;
+                        return tick <= currentSegment.tick;
                     }).length - 1;
 
-                    score.measures[measureIdx].numElements++;
-
-                    var processedElement = processElement(cursor.element);
-                    if (processedElement) {
-                        processedElement.startTick = cursor.tick;
-                        score.measures[measureIdx].elements[`staff${k}`].push(processedElement);
+                    for (var v = 0; v < 4; v++) {
+                        var track = k * 4 + v;
+                        var el = currentSegment.elementAt(track);
+                        if (el) {
+                            score.measures[measureIdx].numElements++;
+                            var processedElement = processElement(el);
+                            if (processedElement) {
+                                processedElement.startTick = currentSegment.tick;
+                                processedElement.voice = v;
+                                score.measures[measureIdx].elements[`staff${k}`].push(processedElement);
+                            }
+                        }
                     }
-
-                    if (!cursor.next()) break;
+                    currentSegment = currentSegment.next;
                 }
             }
 
