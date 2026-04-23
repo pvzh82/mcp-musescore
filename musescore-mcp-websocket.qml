@@ -118,6 +118,21 @@ MuseScore {
         return noteNames[note % 12];
     }
 
+    function getTpcName(tpc) {
+        if (tpc === -1) return "Fbb";
+        var tpcNames = [
+            "Cbb", "Gbb", "Dbb", "Abb", "Ebb", "Bbb", "Fb",
+            "Cb",  "Gb",  "Db",  "Ab",  "Eb",  "Bb",  "F",
+            "C",   "G",   "D",   "A",   "E",   "B",   "F#",
+            "C#",  "G#",  "D#",  "A#",  "E#",  "B#",  "F##",
+            "C##", "G##", "D##", "A##", "E##", "B##", "F###"
+        ];
+        if (tpc >= 0 && tpc < tpcNames.length) {
+            return tpcNames[tpc];
+        }
+        return "Unknown";
+    }
+
     function getDurationName(duration) {
         const durationNames = ["LONG","BREVE","WHOLE","HALF","QUARTER","EIGHTH","16TH","32ND","64TH","128TH","256TH","512TH","1024TH","ZERO","MEASURE","INVALID"];
         return durationNames[duration] || "UNKNOWN";
@@ -199,48 +214,44 @@ MuseScore {
 
     function processElement(element) {
         if (!element) return null;
-        
+        if (element.name !== "Chord" && element.name !== "Rest") return null;
+
         var base = {
             name: element.name,
-            subtype: element.subtype,
-            subtypeName: element.subtypeName,
-            baseDuration: getDurationName(element.durationType ? element.durationType.type : 0),
-            dotted: element.durationType ? element.durationType.dots : 0,
             durationTicks: element.actualDuration ? element.actualDuration.ticks : 0,
-            tuplet: element.tuplet ? {   
-                durationNumerator: element.tuplet.duration.numerator,
-                durationDenominator: element.tuplet.duration.denominator,
-            } : null
+            isTie: element.tieForward ? true : false,
+            isTuplet: element.tuplet ? true : false
         };
 
-        switch (element.name) {
-            case "Note":
-                return Object.assign(base, {
-                    pitchMidi: element.pitch,
-                    pitchName: getNoteName(element.pitch),
-                    noteType: element.noteType,
-                    accidental: element.accidental,
-                    tieBack: element.tieBack,
-                    tieForward: element.tieForward
-                });
-            
-            case "Chord":
-                return Object.assign(base, {
-                    noteType: element.noteType,
-                    notes: Object.keys(element.notes || {}).map(function(k) {
-                        return {
-                            pitchMidi: element.notes[k].pitch, 
-                            pitchName: getNoteName(element.notes[k].pitch)
-                        };
-                    })
-                });
-                
-            case "Rest":
-                return base;
-                
-            default:
-                return { name: element.name, properties: Object.keys(element) };
+        if (element.lyrics && element.lyrics.length > 0) {
+            base.lyrics = [];
+            for (var l = 0; l < element.lyrics.length; l++) {
+                var lyr = element.lyrics[l];
+                if (lyr) {
+                    base.lyrics.push({
+                        text: lyr.text,
+                        no: lyr.no,
+                        syllabic: lyr.syllabic
+                    });
+                }
+            }
         }
+
+        if (element.name === "Chord") {
+            base.notes = [];
+            var notesObj = element.notes || {};
+            var keys = Object.keys(notesObj);
+            for (var k = 0; k < keys.length; k++) {
+                var note = notesObj[keys[k]];
+                base.notes.push({
+                    pitchMidi: note.pitch,
+                    tpc: note.tpc,
+                    pitchName: getTpcName(note.tpc)
+                });
+            }
+        }
+                
+        return base;
     }
 
     // ========================================
@@ -308,24 +319,59 @@ MuseScore {
                     startStaff: selection.startStaff    
                 });
 
-                var elements = [];
-                while (cursor.tick < endSegment.tick && cursor.element) {
-                    elements.push(processElement(cursor.element));
-                    if (!cursor.next()) break;
+                var elementsMap = {};
+                for (var st = selection.startStaff; st < selection.endStaff; st++) {
+                    elementsMap[`staff${st}`] = [];
+                }
+
+                var currentSegment = startSegment;
+                while (currentSegment && currentSegment.tick < endSegment.tick) {
+                    for (var s = selection.startStaff; s < selection.endStaff; s++) {
+                        for (var v = 0; v < 4; v++) {
+                            var track = s * 4 + v;
+                            var el = currentSegment.elementAt(track);
+                            if (el) {
+                                var processed = processElement(el);
+                                if (processed) {
+                                    processed.voice = v;
+                                    processed.startTick = currentSegment.tick;
+                                    elementsMap[`staff${s}`].push(processed);
+                                }
+                            }
+                        }
+                    }
+                    currentSegment = currentSegment.next;
                 }
 
                 selectionState = {
                     startStaff: selection.startStaff,
                     endStaff: selection.endStaff,
                     startTick: startSegment.tick,
-                    elements: elements,
-                    totalDuration: elements.reduce(function(a, b) { return a + (b.durationTicks || 0); }, 0)
+                    elements: elementsMap,
+                    totalDuration: endSegment.tick - startSegment.tick
                 };
-
-                return { success: true, currentSelection: selectionState };
             } else {
-                return { success: false, error: "No valid selection found" };
+                var c = createCursor();
+                if (c && c.element) {
+                    var elElement = processElement(c.element);
+                    elElement.startTick = c.tick;
+                    var sStart = selection.startStaff || 0;
+                    var singleMap = {};
+                    singleMap[`staff${sStart}`] = [elElement];
+                    
+                    selectionState = {
+                        startStaff: sStart,
+                        endStaff: sStart + 1,
+                        startTick: c.tick,
+                        elements: singleMap,
+                        totalDuration: elElement.durationTicks
+                    };
+                } else {
+                    return { error: "No valid selection or cursor elements found" };
+                }
             }
+
+            return { success: true, currentSelection: selectionState };
         } catch (e) {
             return { success: false, error: e.toString() };
         }
@@ -348,23 +394,20 @@ MuseScore {
 
         return executeWithUndo(function() {
             var score = getScoreSummary();
-            var measure = score.measures[params.measure - 1];
+            if (params.measure < 1 || params.measure > score.measures.length) {
+                return { error: "Invalid measure number" };
+            }
+            var measureIdx = params.measure - 1;
+            var measure = score.measures[measureIdx];
             var startTick = measure.startTick;
             
-            var cursor = createCursor({ startTick: startTick, startStaff: selectionState.startStaff });
-            var element = processElement(cursor.element);
-            var staffIdx = selectionState.startStaff;
+            var endTick = (measureIdx + 1 < score.measures.length) ? score.measures[measureIdx + 1].startTick : curScore.lastSegment.tick;
             
             curScore.selection.clear();
-            curScore.selection.selectRange(startTick, startTick + element.durationTicks, staffIdx, staffIdx + 1);
+            curScore.selection.selectRange(startTick, endTick, 0, curScore.nstaves);
             
-            selectionState = {
-                startStaff: staffIdx,
-                endStaff: staffIdx + 1,
-                startTick: startTick,
-                elements: [element],
-                totalDuration: element.durationTicks
-            };
+            var res = syncStateToSelection();
+            if (res.error) return res;
             
             return { success: true, currentSelection: selectionState };
         });
@@ -567,41 +610,30 @@ MuseScore {
     function selectCurrentMeasure() {
         return executeWithUndo(function() {
             var cursor = createCursor({ 
-                startTick: selectionState.startTick, 
-                startStaff: selectionState.startStaff 
+                startTick: selectionState.startTick || 0, 
+                startStaff: selectionState.startStaff || 0 
             });
 
             var currTick = cursor.tick;
-            var currStaff = cursor.staffIdx;
             var scoreSummary = getScoreSummary();
 
-            var measureIdx = scoreSummary.measures.filter(function(measure) { 
-                return measure.startTick <= currTick; 
+            var measureIdx = scoreSummary.measures.filter(function(m) { 
+                return m.startTick <= currTick; 
             }).length - 1;
             
+            if (measureIdx < 0) return { error: "Invalid cursor position" };
+            
             var measure = scoreSummary.measures[measureIdx];
-            var measureElements = measure.elements[`staff${currStaff}`];
-            var totalDuration = measureElements.reduce(function(a, b) { 
-                return a + (b.durationTicks || 0); 
-            }, 0);
-            var measureEndTick = measure.startTick + totalDuration;
+            var startTick = measure.startTick;
+            var endTick = (measureIdx + 1 < scoreSummary.measures.length) ? scoreSummary.measures[measureIdx + 1].startTick : curScore.lastSegment.tick;
 
             curScore.selection.clear();
-            curScore.selection.selectRange(measure.startTick, measureEndTick, currStaff, currStaff + 1);
+            curScore.selection.selectRange(startTick, endTick, 0, curScore.nstaves);
 
-            selectionState = {
-                startStaff: currStaff,
-                endStaff: currStaff + 1,
-                startTick: measure.startTick,
-                elements: measureElements,
-                totalDuration: totalDuration
-            };
-
-            return { 
-                success: true, 
-                message: `Selected measure ${measureIdx + 1}`, 
-                currentSelection: selectionState
-            };
+            var res = syncStateToSelection();
+            if (res.error) return res;
+            
+            return { success: true, message: `Selected measure ${measureIdx + 1}`, currentSelection: selectionState };
         });
     }
 
@@ -610,25 +642,55 @@ MuseScore {
         if (!validation.valid) return validation;
 
         return executeWithUndo(function() {
-            var cursor = createCursor({ 
-                startTick: params.startTick, 
-                startStaff: params.startStaff 
-            });
+            var startTick = params.startTick;
+            var endTick = params.endTick;
+            var startStaff = params.startStaff;
+            var endStaff = params.endStaff;
 
-            var element = processElement(cursor.element);
-            
+            // Visual GUI snap
             curScore.selection.clear();
-            curScore.selection.selectRange(params.startTick, params.endTick, params.startStaff, params.endStaff);
+            curScore.selection.selectRange(startTick, endTick, startStaff, endStaff);
+
+            var elementsMap = {};
+            for (var st = startStaff; st <= endStaff; st++) {
+                elementsMap[`staff${st}`] = [];
+            }
+
+            var c = createCursor({ startTick: 0, startStaff: startStaff });
+            c.rewind(0);
+            var currentSegment = c.segment;
+
+            while (currentSegment && currentSegment.tick < startTick) {
+                currentSegment = currentSegment.next;
+            }
+
+            while (currentSegment && currentSegment.tick < endTick) {
+                for (var s = startStaff; s <= endStaff; s++) {
+                    for (var v = 0; v < 4; v++) {
+                        var track = s * 4 + v;
+                        var el = currentSegment.elementAt(track);
+                        if (el) {
+                            var processed = processElement(el);
+                            if (processed) {
+                                processed.voice = v;
+                                processed.startTick = currentSegment.tick;
+                                elementsMap[`staff${s}`].push(processed);
+                            }
+                        }
+                    }
+                }
+                currentSegment = currentSegment.next;
+            }
 
             selectionState = {
-                startStaff: params.startStaff,
-                endStaff: params.endStaff,
-                startTick: params.startTick,
-                elements: [element],
-                totalDuration: params.endTick - params.startTick
+                startStaff: startStaff,
+                endStaff: endStaff,
+                startTick: startTick,
+                elements: elementsMap,
+                totalDuration: endTick - startTick
             };
 
-            return { success: true, message: "Selection updated", currentSelection: selectionState };
+            return { success: true, message: "Custom range mapped", currentSelection: selectionState };
         });
     }
 
@@ -979,6 +1041,7 @@ MuseScore {
         return executeWithUndo(function() {
             var tempState = selectionState;
             var score = {
+                title: curScore.metaTag("workTitle") || curScore.title || "",
                 numMeasures: curScore.nmeasures,
                 measures: [],
                 staves: []
@@ -1021,22 +1084,27 @@ MuseScore {
             // Process elements for each staff
             for (var k = 0; k < curScore.nstaves; k++) {
                 cursor.rewind(0);
-                cursor.staffIdx = k;
+                var currentSegment = cursor.segment;
 
-                while (cursor.element) {
+                while (currentSegment) {
                     var measureIdx = measureBoundaries.filter(function(tick) {
-                        return tick <= cursor.tick;
+                        return tick <= currentSegment.tick;
                     }).length - 1;
 
-                    score.measures[measureIdx].numElements++;
-
-                    var processedElement = processElement(cursor.element);
-                    if (processedElement) {
-                        processedElement.startTick = cursor.tick;
-                        score.measures[measureIdx].elements[`staff${k}`].push(processedElement);
+                    for (var v = 0; v < 4; v++) {
+                        var track = k * 4 + v;
+                        var el = currentSegment.elementAt(track);
+                        if (el) {
+                            score.measures[measureIdx].numElements++;
+                            var processedElement = processElement(el);
+                            if (processedElement) {
+                                processedElement.startTick = currentSegment.tick;
+                                processedElement.voice = v;
+                                score.measures[measureIdx].elements[`staff${k}`].push(processedElement);
+                            }
+                        }
                     }
-
-                    if (!cursor.next()) break;
+                    currentSegment = currentSegment.next;
                 }
             }
 
